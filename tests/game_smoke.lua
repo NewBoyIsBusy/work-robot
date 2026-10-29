@@ -238,12 +238,64 @@ test("named robots can be grouped and commanded without affecting another group"
     local data=w:OnSave()
     assert(data.label=="小农" and data.group=="农田组")
 end)
+test("map zones assign multiple robots with API disabled and filter rectangle corners",function()
+    local r,w=setup();local r2,w2=setup();local p=spawn("wilson",1)
+    local zones=assert(TheWorld.components.wr_workzones)
+    local previousbox=spawn("treasurechest",0,12);w.supply=previousbox
+    local bounds={x1=base.x-8,z1=base.z-4,x2=base.x+8,z2=base.z+4}
+    local ok,msg=zones:Apply(p,{op="save",bounds=bounds,mode="farm",robots={r.GUID,r2.GUID}})
+    assert(ok,msg);assert(w.region and w2.region and w.region.id==w2.region.id and w.config.farm)
+    assert(w.supply==nil,"reassignment must release the old out-of-area supply binding")
+    local inside=spawn("log",7,3);local outside=spawn("log",0,5)
+    assert(w:Inside(inside) and not w:Inside(outside))
+    for _,e in ipairs(w:Entities()) do assert(e~=outside,"entity outside rectangle entered work search") end
+    assert(zones:Apply(p,{op="pause",id=w.region.id}));assert(w.config.paused and w2.config.paused)
+    assert(zones:Apply(p,{op="resume",id=w.region.id}));assert(not w.config.paused)
+    local id=w.region.id
+    assert(zones:Apply(p,{op="save",id=id,bounds=bounds,mode="guard",robots={r.GUID}}))
+    assert(w.config.guard and not w.config.farm and not w2.region and w2.config.paused)
+    assert(zones:Apply(p,{op="delete",id=id}));assert(not w.region and w.config.paused)
+end)
+test("invalid or stale map assignment never partially updates robots",function()
+    local r,w=setup();local p=spawn("wilson",1);local zones=TheWorld.components.wr_workzones
+    local old=w.config.farm
+    local b={x1=base.x-8,z1=base.z-8,x2=base.x+8,z2=base.z+8}
+    assert(not zones:Apply(p,{op="save",bounds=b,mode="guard",robots={r.GUID,999999999}}))
+    assert(w.region==nil and w.config.farm==old)
+    assert(not zones:Apply(p,{op="save",bounds=b,mode="guard",robots={r.GUID,r.GUID}}))
+    b.x2=b.x1+161
+    assert(not zones:Apply(p,{op="save",bounds=b,mode="guard",robots={r.GUID}}))
+    assert(w.region==nil)
+end)
+test("map areas and robot assignment survive save records",function()
+    local r,w=setup();local p=spawn("wilson",1);local zones=TheWorld.components.wr_workzones
+    assert(zones:Apply(p,{op="save",bounds={x1=base.x-7,z1=base.z-7,x2=base.x+7,z2=base.z+7},mode="haul",robots={r.GUID},label="营地搬运"}))
+    local id=w.region.id
+    local record=r:GetSaveRecord()
+    assert(record.data.wr_worker.region.id==id)
+    local restored=assert(SpawnSaveRecord(record));spawned[#spawned+1]=restored;restored:StopBrain()
+    assert(restored.components.wr_worker.region.id==id and restored.components.wr_worker.config.haul)
+    local data=zones:OnSave();zones:OnLoad(data)
+    assert(zones:Find(id).label=="营地搬运")
+    assert(zones:Apply(p,{op="delete",id=id}))
+end)
 print("WR_GAME_RESULT "..count.." synchronous cases passed")
 
 -- Keep this actor awake so a real server brain walks, animates, picks up, and stores.
 local robot=spawn("work_robot")
 robot.entity:SetCanSleep(false)
 robot.components.wr_worker:SetHome(base)
+-- A temporary native speed modifier deterministically reproduces a wedged
+-- actor. It must recover through normal WALKTO/WR_WORK actions after release.
+robot.components.locomotor:SetExternalSpeedMultiplier(robot,"navigation_test",0)
+local recovered=false
+local monitor=robot:DoPeriodicTask(.25,function()
+    local job=robot.components.wr_worker.job
+    if job and job.navigation and job.navigation.attempts>0 then recovered=true end
+end)
+robot:DoTaskInTime(4.5,function()
+    robot.components.locomotor:RemoveExternalSpeedMultiplier(robot,"navigation_test")
+end)
 local chest=spawn("treasurechest",4)
 local logs=spawn("log",-4)
 local ai_robot,ai_worker=setup()
@@ -256,10 +308,13 @@ local ai_received=false
 require("wr_commands").Handle(ai_player,"守着农田顺便收菜",function(s)
     if ai_worker.config.guard and ai_worker.config.harvest and ai_worker2.config.guard and ai_worker2.config.harvest then ai_received=true end
 end,{enabled=true,allplayers=true,endpoint="http://127.0.0.1:8766/plan"})
-TheWorld:DoTaskInTime(18,function()
+TheWorld:DoTaskInTime(24,function()
     local ok,err=pcall(function()
         assert(chest.components.container:FindItem(function(e)return e.prefab=="log" end),"brain did not finish pickup and delivery")
         print("WR_GAME_PASS autonomous walking animation pickup delivery")
+        assert(recovered,"stationary robot did not attempt a safe detour")
+        monitor:Cancel()
+        print("WR_GAME_PASS native movement stall detects detours and resumes original work")
         assert(ai_received,"native HTTP bridge callback did not apply policy")
         print("WR_GAME_PASS native HTTP loopback bridge with a deterministic fake model (no API charge)")
         print("WR_GAME_SUCCESS")

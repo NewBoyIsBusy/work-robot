@@ -1,0 +1,81 @@
+-- Real renderer integration checks; only loaded by run_commander_ui.py.
+assert(TheWorld and not TheWorld.ismastersim and ThePlayer and ThePlayer.HUD)
+local count=0
+local function pass(name) count=count+1; print("WR_UI_PASS "..name) end
+local function approx(a,b,epsilon) assert(math.abs(a-b)<(epsilon or .05), tostring(a).." != "..tostring(b)) end
+local function later(fn,delay)
+    TheWorld:DoStaticTaskInTime(delay or .8,function()
+        local ok,err=pcall(fn)
+        if not ok then print("WR_UI_FAILURE "..tostring(err)) end
+    end)
+end
+local screen=require("screens/mapscreen")(ThePlayer)
+TheFrontEnd:PushScreen(screen)
+local ui=assert(screen._wr_commander,"MapScreen commander was not installed")
+assert(ui.entry:IsVisible() and not ui.panel:IsVisible())
+pass("native MapScreen constructs commander with native UI widgets")
+local original_cursor=ui.Cursor
+ui.Cursor=function() return 100*ui.scale,ui.h-35*ui.scale end
+assert(screen:OnControl(CONTROL_ACCEPT,true))
+assert(screen:OnControl(CONTROL_ACCEPT,false))
+ui.Cursor=original_cursor
+assert(ui.panel:IsVisible() and not ui.entry:IsVisible())
+pass("native map control handler opens commander from entry button")
+
+later(function()
+    assert(#ui.state.robots==2,"Real server commander query did not return the two fixtures")
+    pass("client query receives replicated robot roster from real server")
+    local x,y,z=ThePlayer.Transform:GetWorldPosition()
+    for _,offset in ipairs({{0,0},{24,0},{0,24},{-24,-24}}) do
+        local wx,wz=x+offset[1],z+offset[2]
+        local mx,my=screen.minimap:WorldPosToMapPos(wx,wz,0)
+        local rx,rz=screen.minimap:MapPosToWorldPos(mx,my,0)
+        approx(rx,wx);approx(rz,wz)
+        local px,py=ui:WorldToWidget(wx,wz)
+        approx(px,mx*ui.w*.5);approx(py,my*ui.h*.5)
+    end
+    pass("native map projection round-trips points and maps overlay coordinates")
+    assert(ui:HitPanel(20*ui.scale,ui.h-20*ui.scale))
+    assert(not ui:HitPanel(ui.w-20,ui.h/2))
+    ui:NewZone()
+    ui:BeginDraw(x+20,z+20)
+    ui:EndDraw(x-20,z-20)
+    approx(ui.draft.bounds.x1,x-20);approx(ui.draft.bounds.x2,x+20)
+    approx(ui.draft.bounds.z1,z-20);approx(ui.draft.bounds.z2,z+20)
+    ui:SetMode("farm")
+    ui:ToggleRobot(ui.state.robots[1].id)
+    ui:ToggleRobot(ui.state.robots[2].id)
+    ui:DrawOverlay()
+    for _,line in ipairs(ui.draftvisual.lines) do assert(line:IsVisible()) end
+    pass("reverse-direction rectangle drawing and four border widgets render")
+    assert(ui:Apply())
+    later(function()
+        assert(not ui.pending,"Apply RPC did not acknowledge")
+        assert(#ui.state.zones==1 and ui.draft.id,"Saved zone missing from response")
+        local zone=ui.state.zones[1]
+        assert(zone.mode=="farm" and #zone.robots==2)
+        approx(zone.bounds.x2-zone.bounds.x1,40)
+        pass("area and both robot assignments survive real apply RPC")
+        assert(ui:Pause())
+        later(function()
+            assert(ui.state.zones[1].paused)
+            assert(ui.state.robots[1].paused and ui.state.robots[2].paused)
+            pass("pause button updates whole assigned group")
+            assert(ui:Resume())
+            later(function()
+                assert(not ui.state.zones[1].paused)
+                pass("resume button updates whole assigned group")
+                assert(ui:Delete())
+                later(function()
+                    assert(#ui.state.zones==0 and not ui.draft.id)
+                    pass("delete removes saved zone and clears editable selection")
+                    ui:Close()
+                    assert(not ui.panel:IsVisible() and ui.entry:IsVisible())
+                    TheFrontEnd:PopScreen(screen)
+                    pass("closing commander and native map cleanly restores screen")
+                    print("WR_UI_SUCCESS "..count.." checks")
+                end)
+            end)
+        end)
+    end)
+end,1.2)

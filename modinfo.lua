@@ -1,7 +1,7 @@
 name = "勤务机器人"
-description = "用原版瓦器人升级制作。通过原版聊天窗 /robot 指挥种田、收菜、收鱼、搬运、做饭和站哨；可选接入 DeepSeek。"
+description = "原版地图框选工作区域，点击分配机器人种田、收鱼、搬运、做饭与站哨。带卡住检测和绕行，全部工作无需 API；聊天指令和 DeepSeek 可选。"
 author = "wanzi"
-version = "0.1.0"
+version = "0.2.0"
 api_version = 10
 dst_compatible = true
 all_clients_require_mod = true
@@ -16,8 +16,9 @@ configuration_options = {
     },default=false },
     { name = "RADIUS", label = "工作半径", options = {
         {description="8（两块地皮）",data=8}, {description="12（三块地皮）",data=12},
-        {description="16（四块地皮）",data=16}, {description="20（五块地皮）",data=20},
-    }, default=12 },
+        {description="24（六块地皮）",data=24}, {description="40（十块地皮）",data=40},
+        {description="80（二十块地皮）",data=80},
+    }, default=24 },
 }
 local settings = {
     {"FARM", "播种与补耕"}, {"HARVEST", "收获成熟作物"},

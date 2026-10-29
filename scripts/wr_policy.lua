@@ -7,7 +7,7 @@ function M.Validate(p)
     local out={}
     for k,v in pairs(p) do
         if fields[k]==nil or type(v)~=fields[k] then return nil end
-        if k=="radius" and (v~=math.floor(v) or v<4 or v>20) then return nil end
+        if k=="radius" and (v~=math.floor(v) or v<4 or v>80) then return nil end
         if k=="recipe" and v~="meatballs" then return nil end
         out[k]=v
     end

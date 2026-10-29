@@ -86,7 +86,7 @@ local function fn()
     inst:SetBrain(brain)
     inst:ListenForEvent("onremove", function() inst.components.wr_worker:Cancel() end)
     inst:DoTaskInTime(0, function()
-        if inst.components.wr_worker.home == nil then inst.components.wr_worker:SetHome(inst:GetPosition()) end
+        if inst.components.wr_worker.home == nil and inst.components.wr_worker.region == nil then inst.components.wr_worker:SetHome(inst:GetPosition()) end
         CheckBroken()
         inst.components.wr_worker:Sync()
     end)

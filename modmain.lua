@@ -1,7 +1,7 @@
 local G = GLOBAL
 PrefabFiles = { "work_robot" }
 G.TUNING.WORK_ROBOT = {
-    radius = GetModConfigData("RADIUS") or 12,
+    radius = GetModConfigData("RADIUS") or 24,
     farm = GetModConfigData("FARM") ~= false,
     harvest = GetModConfigData("HARVEST") ~= false,
     tend = GetModConfigData("TEND") ~= false,
@@ -22,3 +22,5 @@ local action = AddAction("WR_WORK", "工作", function(act)
 end)
 action.distance = 1.5
 G.require("wr_chat")(env)
+G.require("wr_commander")(env)
+G.require("wr_mapui")(env)

@@ -1,6 +1,8 @@
 -- Jobs are reserved while walking and validated again at the animation frame.
 -- All ownership changes happen on the server, one item at a time.
 local reservations = setmetatable({}, {__mode="k"})
+local Navigation = require("wr_navigation")
+local Regions = require("wr_regions")
 local function Valid(e) return e ~= nil and e:IsValid() and not e:IsInLimbo() end
 local function Count(item) return item.components.stackable and item.components.stackable:StackSize() or 1 end
 local function Seed(item) return item.components.farmplantable ~= nil end
@@ -18,18 +20,58 @@ local Worker = Class(function(self, inst)
     self.config.paused = false
     self.config.recipe = "meatballs"
     self.blocked = setmetatable({}, {__mode="k"})
+    self.failures = setmetatable({}, {__mode="k"})
     self.nextscan = 0
 end)
 
+function Worker:InvalidateScan()
+    self.nextscan=0
+    self.entitycache=nil
+end
 function Worker:SetHome(pt)
     self:Cancel()
+    local previous=self.region
+    self.region=nil
     self.home = {x=pt.x, z=pt.z}
-    self.nextscan = 0
+    self.commandrevision=(self.commandrevision or 0)+1
+    self:InvalidateScan()
+    self.inst:PushEvent("wr_regionchanged",{old=previous})
     self:Sync()
+end
+function Worker:SetRegion(region)
+    if type(region)~="table" then return false end
+    local bounds=Regions.NormalizeBounds(region.bounds)
+    if not bounds then return false end
+    local p=self.inst:GetPosition()
+    local home=Regions.FindHome(bounds,{x=p.x,z=p.z})
+    if not home then return false end
+    local copy=Regions.Copy(region)
+    copy.bounds=bounds
+    self:Cancel()
+    local previous=self.region
+    self.region=copy
+    self.home=home
+    self.commandrevision=(self.commandrevision or 0)+1
+    self:InvalidateScan()
+    self.inst:PushEvent("wr_regionchanged",{old=previous,region=self.region})
+    self:Sync()
+    return true
+end
+function Worker:ClearRegion()
+    self:Cancel()
+    local previous=self.region
+    self.region=nil
+    local p=self.inst:GetPosition()
+    self.home=Navigation.IsWalkable(p.x,p.z) and {x=p.x,z=p.z} or nil
+    self.config.paused=true
+    self.commandrevision=(self.commandrevision or 0)+1
+    self:InvalidateScan()
+    self.inst:PushEvent("wr_regionchanged",{old=previous})
+    self:Sync("工作区域已解除，机器人已暂停。")
 end
 function Worker:OnSave()
     local refs={}
-    local data={home=self.home,config=self.config,label=self.label,group=self.group}
+    local data={home=self.home,config=self.config,label=self.label,group=self.group,region=self.region}
     for _,role in ipairs({"supply","output"}) do
         if self[role] and self[role]:IsValid() then data[role]=self[role].GUID;refs[#refs+1]=self[role].GUID end
     end
@@ -40,6 +82,14 @@ function Worker:OnLoad(data)
         self.home=data.home
         self.label=data.label;self.group=data.group
         if data.config then self:ApplyPolicy(data.config) end
+        if data.region and Regions.NormalizeBounds(data.region.bounds) then
+            -- Restoring the assigned rectangle must not silently erase it when
+            -- its old standby point has since become obstructed.
+            self.region=Regions.Copy(data.region)
+            self.region.bounds=Regions.NormalizeBounds(data.region.bounds)
+            self.home=Regions.FindHome(self.region.bounds,self.home)
+            if not self.home then self.config.paused=true end
+        end
     end
 end
 function Worker:LoadPostPass(ents,data)
@@ -55,14 +105,14 @@ function Worker:ApplyPolicy(policy)
     self.inst.components.locomotor:Stop()
     self.inst:ClearBufferedAction()
     for k,v in pairs(normalized) do self.config[k]=v end
-    self.nextscan=0
+    self:InvalidateScan()
     self:Sync()
     return true
 end
 function Worker:Sync(message)
     if message then self.notice=message end
     if self.inst._wr_state then
-        self.inst._wr_state:set(require("json").encode({config=self.config,home=self.home,
+        self.inst._wr_state:set(require("json").encode({config=self.config,home=self.home,region=self.region,
             supply=self.supply and self.supply:IsValid() and self.supply.GUID or nil,
             output=self.output and self.output:IsValid() and self.output.GUID or nil,
             notice=self.notice or "",job=self.job and self.job.kind or "idle"}))
@@ -76,7 +126,8 @@ function Worker:CanWork()
 end
 function Worker:Inside(e)
     local x, _, z = e.Transform:GetWorldPosition()
-    return (x-self.home.x)^2+(z-self.home.z)^2 <= self.config.radius^2
+    if self.region then return Regions.Inside(self.region.bounds,x,z) end
+    return self.home~=nil and (x-self.home.x)^2+(z-self.home.z)^2 <= self.config.radius^2
 end
 function Worker:Available(e)
     local r = reservations[e]
@@ -109,33 +160,136 @@ function Worker:Cancel()
     if self.job and self.job.target and reservations[self.job.target]
         and reservations[self.job.target].worker == self then reservations[self.job.target]=nil end
     self.job = nil
-    if self.timeout then self.timeout:Cancel(); self.timeout=nil end
+    if self.watchdog then self.watchdog:Cancel(); self.watchdog=nil end
+    self.inst.components.locomotor:Stop()
+    self.inst.components.locomotor:Clear()
+    self.inst:ClearBufferedAction()
 end
-function Worker:MakeAction(kind, target, item)
+function Worker:FailJob(job,message,navigation)
+    if self.job~=job then return end
+    local delay=20
+    if navigation and job.target then
+        self.failures[job.target]=math.min(3,(self.failures[job.target] or 0)+1)
+        delay=self.failures[job.target]*60
+    end
+    if job.target then self.blocked[job.target]=GetTime()+delay
+    else self.homeblocked=GetTime()+60 end
     self:Cancel()
-    local job={kind=kind,target=target,item=item}
-    self.job=job
-    self:Sync()
-    reservations[target]={worker=self,untiltime=GetTime()+22}
-    local act=BufferedAction(self.inst,target,ACTIONS.WR_WORK,nil,nil,nil,kind=="fish" and 3 or kind=="attack" and 1 or 1.5)
+    self.nextscan=0
+    self:Sync(message or "目标暂时无法操作，已跳过并继续其他工作。")
+end
+function Worker:ActionForJob(job)
+    local waypoint=job.waypoint
+    local walk=waypoint or (job.kind=="return" and job.position or nil)
+    local act=walk and BufferedAction(self.inst,nil,ACTIONS.WALKTO,nil,Vector3(walk.x,0,walk.z))
+        or BufferedAction(self.inst,job.target,ACTIONS.WR_WORK,nil,nil,nil,
+            job.kind=="fish" and 3 or job.kind=="attack" and 1 or 1.5)
     act.wr_job=job
-    act:AddSuccessAction(function() if self.job==job then self:Cancel() end end)
-    act:AddFailAction(function()
-        self.blocked[target]=GetTime()+20
-        if self.job==job then self:Cancel() end
-    end)
-    self.timeout=self.inst:DoTaskInTime(20,function()
-        if self.job==job then
-            self.blocked[target]=GetTime()+30
-            self.inst.components.locomotor:Stop()
-            self.inst:ClearBufferedAction()
+    job.action=act
+    job.waiting=false
+    act:AddSuccessAction(function()
+        if self.job~=job or job.action~=act then return end
+        if waypoint then
+            job.waypoint=nil;job.action=nil;job.waiting=true
+            local x,_,z=self.inst.Transform:GetWorldPosition()
+            local tx,tz=self:JobDestination(job)
+            Navigation.ResetProgress(job.navigation,GetTime(),x,z,tx,tz)
+            self:Sync("已绕过障碍，继续原任务。")
+        else
+            if job.target then self.failures[job.target]=nil end
             self:Cancel()
+            self:InvalidateScan()
+            self:Sync("")
+        end
+    end)
+    act:AddFailAction(function()
+        if self.job==job and job.action==act then
+            if waypoint then self:Recover(job)
+            else self:FailJob(job) end
         end
     end)
     return act
 end
+function Worker:JobDestination(job)
+    if job.waypoint then return job.waypoint.x,job.waypoint.z end
+    if job.target and job.target:IsValid() then
+        local x,_,z=job.target.Transform:GetWorldPosition()
+        return x,z
+    end
+    local p=job.position or self.home
+    return p.x,p.z
+end
+function Worker:Recover(job)
+    if self.job~=job then return end
+    -- Suppress the obsolete work action's callback before Clear fails it.
+    -- DoAction still receives that failure, then requests the detour next tick.
+    job.action=nil
+    job.waypoint=nil
+    self.inst.components.locomotor:Stop()
+    self.inst.components.locomotor:Clear()
+    self.inst:ClearBufferedAction()
+    local tx,tz=self:JobDestination(job)
+    local point=Navigation.Waypoint(self.inst,job.navigation,tx,tz)
+    if not point then
+        self:FailJob(job,"路线受阻，无法安全绕行；已释放目标并暂时跳过，继续其他工作。",true)
+        return
+    end
+    job.waypoint=point;job.waiting=true
+    local x,_,z=self.inst.Transform:GetWorldPosition()
+    Navigation.ResetProgress(job.navigation,GetTime(),x,z,point.x,point.z)
+    self:Sync("路线受阻，正在尝试绕行（"..job.navigation.attempts.."/"..Navigation.MAX_RETRIES.."）。")
+end
+function Worker:MonitorJob(job)
+    if self.job~=job then return end
+    if not self:CanWork() or self.inst:IsAsleep() then
+        self:Cancel();self:Sync();return
+    end
+    if job.target and (not self:Available(job.target)
+        or (job.kind=="attack" and (not self.config.guard or not self:IsEnemy(job.target)
+            or self.inst.components.health:GetPercent()<=.2))) then
+        self:FailJob(job,"目标已离开工作区或无法继续操作，改做其他工作。")
+        return
+    end
+    local now=GetTime()
+    local x,_,z=self.inst.Transform:GetWorldPosition()
+    local tx,tz=self:JobDestination(job)
+    local state=Navigation.Progress(job.navigation,now,x,z,tx,tz,
+        self.inst.sg and self.inst.sg:HasStateTag("busy"),job.kind=="attack" and not job.waypoint)
+    if state=="expired" then
+        self:FailJob(job,"任务路程耗时过长，已释放目标并暂时跳过，继续其他工作。",true)
+    elseif state=="stalled" then
+        self:Recover(job)
+    elseif job.target then
+        reservations[job.target]={worker=self,untiltime=math.min(job.navigation.deadline,now+Navigation.LEASE_SECONDS)}
+    end
+end
+function Worker:MakeAction(kind, target, item)
+    self:Cancel()
+    local job={kind=kind,target=target,item=item,position=kind=="return" and self.home or nil}
+    self.job=job
+    local x,_,z=self.inst.Transform:GetWorldPosition()
+    local tx,tz=self:JobDestination(job)
+    job.navigation=Navigation.New(GetTime(),x,z,tx,tz,self.inst.components.locomotor.walkspeed,kind)
+    if target then reservations[target]={worker=self,untiltime=GetTime()+Navigation.LEASE_SECONDS} end
+    self.watchdog=self.inst:DoPeriodicTask(.5,function() self:MonitorJob(job) end)
+    self:Sync()
+    return self:ActionForJob(job)
+end
 function Worker:Entities()
-    local es=TheSim:FindEntities(self.home.x,0,self.home.z,self.config.radius,nil,{"INLIMBO","FX","DECOR"})
+    if not self.entitycache or GetTime()>=(self.entitycachetime or 0) then
+        local center=self.region and Regions.Center(self.region.bounds) or self.home
+        local radius=self.config.radius
+        if self.region then
+            local b=self.region.bounds
+            radius=math.sqrt((b.x2-b.x1)^2+(b.z2-b.z1)^2)*.5+.01
+        end
+        self.entitycache=TheSim:FindEntities(center.x,0,center.z,radius,nil,{"INLIMBO","FX","DECOR"})
+        self.entitycachetime=GetTime()+3
+    end
+    local es={}
+    for _,e in ipairs(self.entitycache) do
+        if Valid(e) and self:Inside(e) then es[#es+1]=e end
+    end
     table.sort(es,function(a,b)
         local da=self.inst:GetDistanceSqToInst(a)
         local db=self.inst:GetDistanceSqToInst(b)
@@ -144,7 +298,12 @@ function Worker:Entities()
     return es
 end
 function Worker:NextAction()
-    if not self:CanWork() or GetTime()<self.nextscan then return end
+    if not self:CanWork() then return end
+    if self.job then
+        if self.job.waiting then return self:ActionForJob(self.job) end
+        return
+    end
+    if GetTime()<self.nextscan then return end
     self.nextscan=GetTime()+1
     local es=self:Entities()
     local inv=self.inst.components.inventory
@@ -250,8 +409,10 @@ function Worker:NextAction()
             end
         end
     end
-    if self.inst:GetDistanceSqToPoint(self.home.x,0,self.home.z)>4 then
-        return BufferedAction(self.inst,nil,ACTIONS.WALKTO,nil,Vector3(self.home.x,0,self.home.z))
+    if (not self.region or not self:Inside(self.inst))
+        and GetTime()>=(self.homeblocked or 0)
+        and self.inst:GetDistanceSqToPoint(self.home.x,0,self.home.z)>4 then
+        return self:MakeAction("return")
     end
 end
 

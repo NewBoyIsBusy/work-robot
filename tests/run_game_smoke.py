@@ -32,7 +32,7 @@ console_enabled = true
 [SHARD]
 shard_enabled = false
 """, encoding="utf-8")
-(CLUSTER / "Master/server.ini").write_text("[NETWORK]\nserver_port = 11521\n[STEAM]\nauthentication_port = 11522\nmaster_server_port = 11523\n[SHARD]\nis_master = true\n[ACCOUNT]\nencode_user_path = false\n", encoding="utf-8")
+(CLUSTER / "Master/server.ini").write_text("[NETWORK]\nserver_port = 11013\n[STEAM]\nauthentication_port = 11014\nmaster_server_port = 11015\n[SHARD]\nis_master = true\n[ACCOUNT]\nencode_user_path = false\n", encoding="utf-8")
 (CLUSTER / "Master/modoverrides.lua").write_text('return { work_robot_validation = { enabled = true } }\n', encoding="utf-8")
 (CLUSTER / "Master/worldgenoverride.lua").write_text('return { override_enabled = true, preset = "SURVIVAL_TOGETHER", overrides = { world_size = "small" } }\n', encoding="utf-8")
 fixture = None
@@ -63,7 +63,7 @@ end)
     exe = GAME / "bin64/dontstarve_dedicated_server_nullrenderer_x64.exe"
     log = STORAGE / "engine_console.log"
     with log.open("wb") as out:
-        process = subprocess.Popen([str(exe), "-console", "-offline", "-skip_update_server_mods",
+        process = subprocess.Popen([str(exe), "-console", "-offline", "-skip_update_server_mods", "-port", "11013",
             "-persistent_storage_root", str(STORAGE), "-conf_dir", "DoNotStarveTogether",
             "-cluster", "WorkRobotTest", "-shard", "Master"],
             cwd=exe.parent, stdout=out, stderr=subprocess.STDOUT,

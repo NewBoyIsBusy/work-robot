@@ -5,9 +5,10 @@ local names={farm="播种补耕",harvest="收菜",tend="照料",fish="收鱼",ha
 function M.Status(w)
     local tasks={}
     for _,k in ipairs(Policy.TASKS) do if w.config[k] then tasks[#tasks+1]=names[k] end end
-    return (w.inst:HasTag("broken") and "损坏待修（给予石头）" or w.config.paused and "已暂停" or w.job and "工作中" or "待命").."；半径 "..w.config.radius.."；任务："..table.concat(tasks,"、")
+    return (w.inst:HasTag("broken") and "损坏待修（给予石头）" or w.config.paused and "已暂停" or w.job and "工作中" or "待命").."；"..(w.region and ("区域："..(w.region.label or tostring(w.region.id))) or "半径 "..w.config.radius).."；任务："..table.concat(tasks,"、")
         .."；补给箱："..(w.supply==nil and "自动" or w.supply:IsValid() and tostring(w.supply.GUID) or "已丢失")
         .."；交货箱："..(w.output==nil and "自动" or w.output:IsValid() and tostring(w.output.GUID) or "已丢失")
+        ..(w.notice and w.notice~="" and "；"..w.notice or "")
 end
 local function Near(player,r,radius)
     return r and r:IsValid() and r.components.wr_worker and not r:IsInLimbo()
@@ -118,6 +119,7 @@ function M.Handle(player,text,reply,options)
         return M.Handle(player,order,reply,options)
     end
     if text=="" or text=="帮助" then
+        reply("推荐打开原版地图，使用机器人管理：框选区域、选择任务和机器人、点击应用。无需 API。聊天半径支持 4–80，地图区域优先于圆形半径。")
         reply("原版聊天窗：/robot 选择 [名字或编号]；列表；命名 小农；加选 小渔；编组 农田组；选择组 农田组；选择全部；@农田组 种田。")
         reply("任务：种田 / 只收菜 / 收鱼 / 搬运 / 做饭 / 站哨 / 暂停 / 继续 / 状态；设置：半径 12 / 中心 / 补给箱 / 交货箱 / 解绑。")
         return
