@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+dist/
+*.log
+.tools/
+.env
+.env.*
+steam_upload.vdf
+usage.json
