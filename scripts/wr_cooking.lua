@@ -30,8 +30,8 @@ function M.NextAction(w,es)
     if Ingredients(inv) then return w:MakeAction("cook_start",empty) end
     -- Start a batch with an empty cargo hold; never split a partial recipe across pots.
     if inv:NumItems()>0 or inv:GetActiveItem() then return nil end
-    for _,e in ipairs(es) do
-        if (w.supply==nil or w.supply==e) and w:Available(e) and w:Chest(e) and Ingredients(e.components.container) then
+    for _,e in ipairs(w.boxes or {}) do
+        if w:Available(e) and w:Chest(e) and Ingredients(e.components.container) then
             return w:MakeAction("cook_fetch",e)
         end
     end

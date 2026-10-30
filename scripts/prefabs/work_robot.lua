@@ -31,8 +31,12 @@ local function fn()
     inst:AddTag("NOBLOCK")
     inst:AddTag("wr_robot")
     inst._wr_state = net_string(inst.GUID,"work_robot.state","wr_statedirty")
+    -- Server and client GUIDs differ. This replicated token lets a focus RPC
+    -- resolve the same robot entity on every peer.
+    inst._wr_id = net_string(inst.GUID,"work_robot.id")
     inst.entity:SetPristine()
     if not TheWorld.ismastersim then return inst end
+    inst._wr_id:set(tostring(inst.GUID))
 
     inst:AddComponent("inspectable")
     inst:AddComponent("inventory")
@@ -73,7 +77,9 @@ local function fn()
     end)
     local function CheckBroken()
         if inst.components.health.currenthealth<=1 then
-            inst:AddTag("broken");inst:AddTag("notarget")
+            -- Keep the broken robot clickable so the explicit repair action is
+            -- always available.  "notarget" was why v0.2 repairs appeared dead.
+            inst:AddTag("broken");inst:RemoveTag("notarget")
             inst.components.health:SetInvincible(true)
             inst.components.wr_worker:Cancel()
             inst:ClearBufferedAction()

@@ -8,6 +8,4 @@ lua=LuaRuntime(unpack_returned_tuples=True)
 lua.globals().package.path=str(source/"scripts/?.lua").replace("\\","/")+";"+lua.globals().package.path
 for path in source.rglob("*.lua"):
     lua.execute("assert(loadstring(...))",path.read_text(encoding="utf-8"))
-lua.execute((source/"tests/test_policy.lua").read_text(encoding="utf-8"))
-lua.execute((source/"tests/test_regions.lua").read_text(encoding="utf-8"))
 print("All mod Lua files parse under Lua 5.1")

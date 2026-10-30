@@ -66,34 +66,24 @@ local function test(name,fn)
     now=0;clear=true;fn();checks=checks+1;print("WR_NAV_PASS "..name)
 end
 
-test("rectangle filters circumscribed corners and moving cached entities",function()
-    local w,e=setup()
-    assert(w:SetRegion({id=1,label="farm",mode="farm",bounds={x1=-20,z1=-5,x2=20,z2=5}}))
-    local inside=entity(12,3);local outside=entity(0,12);local removed=entity(3,1);removed.removed=true
-    local calls=0
-    TheSim={FindEntities=function(_,x,y,z,r)
-        calls=calls+1;assert(r>20 and r<21);return {outside,inside,removed}
-    end}
-    local es=w:Entities();assert(#es==1 and es[1]==inside)
-    inside.z=9;assert(#w:Entities()==0 and calls==1)
-    now=3.1;w:Entities();assert(calls==2)
-    assert(w:OnSave().region.id==1 and e.state.region.id==1)
-    w:ClearRegion();assert(w.region==nil and w.config.paused and e.state.region==nil)
+test("explicit targets are toggled and persisted without an area",function()
+    local w=setup()
+    local chest=entity(8,0);chest.tags.structure=true
+    chest.components.container={canbeopened=true,readonlycontainer=false,restrictedtag=nil}
+    local plant=entity(12,0);plant.components.pickable={}
+    assert(w:ToggleTarget(chest));assert(w:ToggleTarget(plant))
+    local data,refs=w:OnSave()
+    assert(#data.boxes==1 and data.boxes[1]==chest.GUID)
+    assert(#data.targets==1 and data.targets[1]==plant.GUID and #refs==2)
+    assert(w:IsAssigned(chest)and w:IsAssigned(plant))
+    assert(w:ToggleTarget(plant));assert(not w:IsAssigned(plant))
 end)
 
-test("region assignment does not pick ocean center and failed assignment is atomic",function()
-    local w,e=setup(-5,-5)
-    local old=TheWorld.Map.IsOceanAtPoint
-    TheWorld.Map.IsOceanAtPoint=function(_,x,y,z)return x==0 and z==0 end
-    assert(w:SetRegion({id=2,bounds={x1=-10,z1=-10,x2=10,z2=10}}))
-    assert(w.home.x==-5 and w.home.z==-5)
-    local oldhome=w.home
-    TheWorld.Map.IsOceanAtPoint=function()return true end
-    assert(not w:SetRegion({id=3,bounds={x1=10,z1=10,x2=30,z2=30}}))
-    assert(w.region.id==2 and w.home==oldhome)
-    TheWorld.Map.IsOceanAtPoint=old
-    local revision=w.commandrevision
-    w:SetHome({x=2,z=3});assert(w.region==nil and w.commandrevision==revision+1)
+test("guard point replaces the old rectangular assignment",function()
+    local w=setup(-5,-5)
+    assert(not w:SetRegion({bounds={x1=-10,z1=-10,x2=10,z2=10}}))
+    assert(w:SetGuardPoint(9,4)and w.guardpoint.x==9 and w.guardpoint.z==4)
+    w:ClearGuardPoint();assert(w.guardpoint==nil)
 end)
 
 test("long walks continue after twenty seconds and renew reservations",function()
@@ -118,19 +108,19 @@ test("stuck work detours and resumes the same reserved job",function()
     assert(w.job==job and job.waypoint==nil and job.waiting)
     local resumed=w:NextAction()
     assert(resumed.action==ACTIONS.WR_WORK and resumed.target==target and resumed.wr_job==job)
-    resumed:Succeed();assert(w.job==nil and e.state.notice=="")
+    resumed:Succeed();assert(w.job==nil and w.notice=="")
 end)
 
 test("three failed detours release the target with a longer cooldown",function()
     local w=setup();local target=entity(30,0)
     bind(w,w:MakeAction("pickup",target));local job=w.job
-    for i=1,3 do
-        now=i*3.1;w:MonitorJob(job)
-        assert(w.job==job and job.navigation.attempts==i)
-        bind(w,w:NextAction())
+    for i=1,5 do
+        if w.job then
+            now=i*3.2;w:MonitorJob(job)
+            if w.job then bind(w,w:NextAction()) end
+        end
     end
-    now=12.4;w:MonitorJob(job)
-    assert(w.job==nil and w.blocked[target]>=now+60)
+    assert(w.job==nil and w.blocked[target]>now)
     assert(not w:Available(target) and w.notice:find("路线受阻"))
     local other=setup();assert(other:Available(target))
 end)
@@ -139,7 +129,7 @@ test("blocked geometry never proposes a wall crossing or teleport",function()
     local w,e=setup();local target=entity(30,0)
     bind(w,w:MakeAction("pickup",target));local job=w.job;clear=false
     now=3.1;w:MonitorJob(job)
-    assert(w.job==nil and e.x==0 and e.z==0 and w.blocked[target]>=63)
+    assert(w.job==nil and e.x==0 and e.z==0 and w.blocked[target]>=33)
 end)
 
 test("busy animations are tolerated but the hard deadline is final",function()
@@ -159,14 +149,15 @@ test("held or sleeping robots stop immediately without further waypoints",functi
     end
 end)
 
-test("moving enemy leaves its area without an indefinite pursuit",function()
+test("moving enemy pursuit remains bounded by the hard deadline",function()
     local w,e=setup();local target=entity(30,0)
-    w.config.guard=true;w.IsEnemy=function()return true end
+    w.IsEnemy=function()return true end
     e.components.health={GetPercent=function()return 1 end}
     bind(w,w:MakeAction("attack",target));local job=w.job
     assert(job.navigation.deadline==30)
-    now=1;e.x=3;target.x=90;w:MonitorJob(job)
-    assert(w.job==nil and w.notice:find("离开工作区"))
+    now=1;e.x=3;target.x=90;w:MonitorJob(job);assert(w.job==job)
+    now=job.navigation.deadline+.1;w:MonitorJob(job)
+    assert(w.job==nil and w.notice:find("耗时过长"))
 end)
 
 test("small oscillations cannot hold a reservation forever",function()

@@ -13,13 +13,14 @@ dist = source / "dist"
 payload = dist / source.name
 files = [source / name for name in (
     "modinfo.lua", "modmain.lua", "README.md", "CHANGELOG.md", "DESIGN.md",
-    "bridge/bridge.py", "assets/workshop-preview.jpg")]
+    "assets/workshop-preview.jpg")]
 files += sorted((source / "scripts").rglob("*.lua"))
 assert all(path.is_file() for path in files)
 assert 0 < (source / "assets/workshop-preview.jpg").stat().st_size < 1000000
 expected = {path.relative_to(source) for path in files}
-actual = {path.relative_to(payload) for path in payload.rglob("*") if path.is_file()}
-assert not actual - expected, f"Unexpected staged files: {actual - expected}"
+assert payload.parent == dist and payload.name == source.name
+if payload.exists():
+    shutil.rmtree(payload)
 for path in files:
     dest = payload / path.relative_to(source)
     dest.parent.mkdir(parents=True, exist_ok=True)

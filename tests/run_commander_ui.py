@@ -1,4 +1,4 @@
-"""Run map commander checks in a real, isolated DST renderer + local server.
+"""Run focus-camera checks in a real, isolated DST renderer + local server.
 
 No desktop input, player profiles, existing worlds or published mods are used.
 Lua is sent through the game's native -console standard input. Both processes
@@ -132,7 +132,7 @@ end)
                 break
         else:
             raise TimeoutError(f"Client player did not spawn; see {client_log}")
-        command(server, 'local p=AllPlayers[1]; assert(p); for i=1,2 do local r=SpawnPrefab("work_robot"); local x,y,z=p.Transform:GetWorldPosition(); r.Transform:SetPosition(x+i*2,y,z+2); r.components.wr_worker:SetHome(r:GetPosition()); r.components.wr_worker:ApplyPolicy({paused=true}); end; print("WR_UI_FIXTURE_READY")')
+        command(server, 'local p=AllPlayers[1]; assert(p); local x,y,z=p.Transform:GetWorldPosition(); local r=SpawnPrefab("work_robot"); r.Transform:SetPosition(x+2,y,z+2); r.components.wr_worker:SetHome(r:GetPosition()); local c=SpawnPrefab("treasurechest"); c.Transform:SetPosition(x+5,y,z+2); local b=SpawnPrefab("berrybush"); b.Transform:SetPosition(x+7,y,z+2); local l=SpawnPrefab("log"); l.Transform:SetPosition(x+12,y,z+2); print("WR_UI_FIXTURE_READY",r.GUID,c.GUID,b.GUID,l.GUID)')
         waitfor(server, server_log, "WR_UI_FIXTURE_READY\t", 20)
         time.sleep(2)
         command(client, 'local ok,err=pcall(require,"wr_ui_validation"); if not ok then print("WR_UI_FAILURE "..tostring(err)) end')
@@ -140,7 +140,7 @@ end)
         for line in output.splitlines():
             if "WR_UI_PASS" in line or "WR_UI_SUCCESS" in line:
                 print(line)
-        print("Client and server used isolated storage; real map widgets and mod RPCs were exercised.")
+        print("Client and server used isolated storage; real focus HUD, camera and mod RPCs were exercised.")
     finally:
         for process in reversed(processes):
             if process.poll() is None:
